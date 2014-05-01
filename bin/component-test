@@ -1,0 +1,179 @@
+#!/usr/bin/env node --harmony-generators
+// vim: set ft=javascript:
+
+/**
+ * Module Dependencies
+ */
+
+var fs = require('fs');
+var path = require('path')
+var read = fs.readFileSync;
+var join = path.join;
+var cwd = process.cwd();
+var glob = require('glob').sync;
+var program = require('commander');
+var yaml = require('yamljs');
+var lib = join(__dirname, '../lib');
+var pkg = join(__dirname, '../package.json');
+var config = require(join(lib, 'config'));
+var runnerdir = join(lib, 'runners');
+var noop = function(){};
+
+/**
+ * Load the config
+ */
+
+var conf = config.read();
+
+/**
+ * Try to read the travis file
+ */
+
+try {
+  var travis = yaml.parse(read(join(cwd, '.travis.yml'), 'utf8'));
+  var travisBrowsers = [];
+  travisBrowsers = travisBrowsers
+    .concat(travis.env.global || [])
+    .concat(travis.env.matrix || [])
+    .filter(function(env) {
+      return /BROWSER=/.test(env);
+    })
+    .map(function(env) {
+      return env.match(/\"([^\"]+)/)[1];
+    })
+    .join(',');
+} catch(e) {}
+
+/**
+ * Program
+ */
+
+program
+  .version(require(pkg).version)
+  .usage('<runner> [options]')
+  .unknownOption = noop;
+
+/**
+ * Browser testing
+ */
+
+program
+  .command('browser')
+  .description('run tests in the default browser')
+  .option('-t, --tunnel', 'create a public url using localtunnel')
+  .action(browser)
+  .unknownOption = noop;
+
+/**
+ * Direct browser testing
+ */
+
+[
+  'safari',
+  'chrome',
+  'firefox',
+  'opera',
+  'ie',
+].forEach(function (browser) {
+  program
+    .command(browser)
+    .description('run tests in ' + browser)
+    .action(function () {
+      var runner = require(join(runnerdir, 'browser'));
+      runner(browser, done);
+    })
+    .unknownOption = noop;
+});
+
+/**
+ * Phantom testing
+ */
+
+// program
+//   .command('phantom')
+//   .description('run tests using phantomjs')
+//   .action(phantom)
+//   .unknownOption = noop;
+
+/**
+ * Sauce testing
+ */
+
+program
+  .command('sauce')
+  .option('-a, --auth <auth>', '<username:accesskey> pass in the saucelabs credentials')
+  .option('-b, --browser <browser>', '<browser, browser, ...> add the browsers to test')
+  .description('run tests using saucelabs')
+  .action(sauce)
+  .unknownOption = noop;
+
+/**
+ * Parse the options, ignoring unknowns
+ */
+
+program.parse(process.argv);
+
+/**
+ * Run tests in browser
+ */
+
+function browser(name, options) {
+  var runner = require(join(runnerdir, 'browser'));
+  if (arguments.length === 1) runner(null, options, done);
+  else runner(name, options, done);
+}
+
+/**
+ * Run tests using phantom
+ */
+
+function phantom() {
+  var runner = require(join(runnerdir, 'phantom'));
+  runner(done);
+}
+
+/**
+ * Run tests using saucelabs
+ */
+
+function sauce(options) {
+  var runner = require(join(runnerdir, 'sauce'));
+  var auth = options.auth || process.env.SAUCE || conf.sauce;
+  var browsers = options.browser || process.env.BROWSER || travisBrowsers;
+
+  // auth
+  if (!auth) {
+    console.error('No authentication specified');
+    process.exit(1);
+  } else {
+    conf.sauce = auth;
+    config.save(conf);
+  }
+
+  // browsers
+  if (!browsers) {
+    console.error('No browsers specified. Example: -b "iphone 6.0 Mac 10.8". Visit:');
+    console.error('http://saucelabs.com/rest/v1.1/info/scout?os_product_names=true');
+    console.error('for a list of available browsers.');
+    process.exit(1);
+  }
+
+  var opts = {};
+  opts.auth = auth;
+  opts.browsers = browsers.trim().split(/\s*,\s*/);
+
+  runner(opts, done);
+}
+
+/**
+ * All done!
+ */
+
+function done(err) {
+  if (err) {
+    console.error(err);
+    process.exit(1);
+  }
+
+  process.exit(0);
+}
